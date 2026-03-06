@@ -6,6 +6,7 @@
  */
 
 session_start();
+require_once '../includes/db.php';
 
 // Access control: Ensure user is logged in and is an organizer
 if (!isset($_SESSION['user_role']) || $_SESSION['user_role'] !== 'organizer') {
@@ -13,7 +14,32 @@ if (!isset($_SESSION['user_role']) || $_SESSION['user_role'] !== 'organizer') {
     exit();
 }
 
+$organizer_id = $_SESSION['user_id'];
 $organizer_name = $_SESSION['user_name'] ?? 'Organizer';
+
+// Fetch summary metrics (total events, total revenue)
+try {
+    $metrics_stmt = $conn->prepare("SELECT COUNT(*) as event_count, SUM(price) as projected_revenue FROM events WHERE organizer_id = ?");
+    $metrics_stmt->bind_param("i", $organizer_id);
+    $metrics_stmt->execute();
+    $metrics = $metrics_stmt->get_result()->fetch_assoc();
+    $metrics_stmt->close();
+} catch (Exception $e) {
+    $metrics = ['event_count' => 0, 'projected_revenue' => 0];
+}
+
+// Fetch recent events for the dashboard
+$events = [];
+try {
+    $stmt = $conn->prepare("SELECT id, title, location, event_date, image FROM events WHERE organizer_id = ? ORDER BY event_date DESC LIMIT 5");
+    $stmt->bind_param("i", $organizer_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $events = $result->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+} catch (mysqli_sql_exception $e) {
+    error_log("Error fetching dashboard events: " . $e->getMessage());
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -21,7 +47,7 @@ $organizer_name = $_SESSION['user_name'] ?? 'Organizer';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Organizer Dashboard - Event Booking</title>
+    <title>Organizer Dashboard - Evently</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -112,6 +138,7 @@ $organizer_name = $_SESSION['user_name'] ?? 'Organizer';
             border-radius: 12px;
             border: 1px solid var(--border);
             padding: 2rem;
+            margin-bottom: 2rem;
         }
 
         .event-list {
@@ -130,6 +157,20 @@ $organizer_name = $_SESSION['user_name'] ?? 'Organizer';
             border-bottom: none;
         }
 
+        .event-content {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .event-img {
+            width: 50px;
+            height: 50px;
+            border-radius: 8px;
+            object-fit: cover;
+            background-color: #f1f5f9;
+        }
+
         .event-info h4 {
             font-size: 1.1rem;
             margin-bottom: 0.25rem;
@@ -140,25 +181,61 @@ $organizer_name = $_SESSION['user_name'] ?? 'Organizer';
             font-size: 0.875rem;
         }
 
-        .stats {
+        .event-actions {
             display: flex;
-            gap: 2rem;
+            gap: 1rem;
         }
 
-        .stat-item {
+        .action-link {
+            text-decoration: none;
+            font-size: 0.875rem;
+            font-weight: 600;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+        }
+
+        .edit-btn {
+            background: #eef2ff;
+            color: var(--primary);
+        }
+
+        .delete-btn {
+            background: #fef2f2;
+            color: #dc2626;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 12px;
+            border: 1px solid var(--border);
             text-align: center;
         }
 
         .stat-val {
             display: block;
             font-weight: 700;
-            font-size: 1.25rem;
+            font-size: 1.5rem;
+            color: var(--primary);
         }
 
         .stat-label {
             color: #6b7280;
             font-size: 0.75rem;
             text-transform: uppercase;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 2rem 0;
+            color: #6b7280;
         }
     </style>
 </head>
@@ -167,8 +244,8 @@ $organizer_name = $_SESSION['user_name'] ?? 'Organizer';
     <nav>
         <h2>Evently.</h2>
         <ul class="nav-menu">
-            <li><a href="#" style="color: var(--primary);">My Events</a></li>
-            <li><a href="#">Create Event</a></li>
+            <li><a href="my_event.php">My Events</a></li>
+            <li><a href="create_event.php">Create Event</a></li>
             <li><a href="#">Bookings</a></li>
             <li><a href="../logout.php" class="logout-link">Logout</a></li>
         </ul>
@@ -180,47 +257,57 @@ $organizer_name = $_SESSION['user_name'] ?? 'Organizer';
                 <p style="color: #6b7280; margin-bottom: 0.25rem;">Organizer Portal</p>
                 <h1>Howdy, <?php echo htmlspecialchars($organizer_name); ?>!</h1>
             </div>
-            <a href="#" class="btn-primary">+ New Event</a>
+
+            <a href="create_event.php" class="btn-primary">+ New Event</a>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <span class="stat-val"><?php echo $metrics['event_count']; ?></span>
+                <span class="stat-label">Total Events</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-val">$<?php echo number_format($metrics['projected_revenue'] ?? 0, 2); ?></span>
+                <span class="stat-label">Projected Revenue</span>
+            </div>
         </div>
 
         <div class="card">
-            <h3 style="margin-bottom: 1.5rem;">Your Events</h3>
+            <h3 style="margin-bottom: 1.5rem;">Recent Events</h3>
             <ul class="event-list">
-                <li class="event-item">
-                    <div class="event-info">
-                        <h4>Tech Summit 2026</h4>
-                        <p>March 15, 2026 • Convention Center</p>
+                <?php if (empty($events)): ?>
+                    <div class="empty-state">
+                        <p>No events found. Start by creating your first event!</p>
                     </div>
-                    <div class="stats">
-                        <div class="stat-item">
-                            <span class="stat-val">120</span>
-                            <span class="stat-label">Sales</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-val">$2.4k</span>
-                            <span class="stat-label">Revenue</span>
-                        </div>
-                    </div>
-                </li>
-                <li class="event-item">
-                    <div class="event-info">
-                        <h4>Acoustic Night</h4>
-                        <p>April 02, 2026 • The Blue Room</p>
-                    </div>
-                    <div class="stats">
-                        <div class="stat-item">
-                            <span class="stat-val">45</span>
-                            <span class="stat-label">Sales</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-val">$900</span>
-                            <span class="stat-label">Revenue</span>
-                        </div>
-                    </div>
-                </li>
+                <?php else: ?>
+                    <?php foreach ($events as $event): ?>
+                        <li class="event-item">
+                            <div class="event-content">
+                                <img src="../uploads/<?php echo $event['image'] ? htmlspecialchars($event['image']) : 'default_event.webp'; ?>"
+                                    alt="event" class="event-img" onerror="this.src='https://via.placeholder.com/50'">
+                                <div class="event-info">
+                                    <h4><?php echo htmlspecialchars($event['title']); ?></h4>
+                                    <p><?php echo date('M d, Y', strtotime($event['event_date'])); ?> •
+                                        <?php echo htmlspecialchars($event['location']); ?></p>
+                                </div>
+                            </div>
+                            <div class="event-actions">
+                                <a href="edit_event.php?id=<?php echo $event['id']; ?>" class="action-link edit-btn">Edit</a>
+                                <a href="delete_event.php?id=<?php echo $event['id']; ?>" class="action-link delete-btn"
+                                    onclick="return confirm('Are you sure you want to delete this event?')">Delete</a>
+                            </div>
+                        </li>
+                    <?php endforeach; ?>
+                <?php endif; ?>
             </ul>
+            <div style="margin-top: 1.5rem; text-align: center;">
+                <a href="my_event.php"
+                    style="color: var(--primary); font-size: 0.875rem; text-decoration: none; font-weight: 600;">View
+                    All Events &rarr;</a>
+            </div>
         </div>
     </div>
 </body>
 
 </html>
+<?php $conn->close(); ?>
